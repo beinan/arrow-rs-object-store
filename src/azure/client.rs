@@ -30,6 +30,7 @@ use crate::client::{
 };
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
+use crate::retry::MultipartRetry;
 use crate::util::{GetRange, deserialize_rfc1123};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
@@ -813,6 +814,7 @@ impl AzureClient {
         parts: Vec<PartId>,
         opts: PutMultipartOptions,
     ) -> Result<PutResult> {
+        let mut retry = MultipartRetry::new(opts.azure_completion_retry_policy());
         let PutMultipartOptions {
             tags,
             attributes,
@@ -824,16 +826,23 @@ impl AzureClient {
             .map(|part| BlockId::from(part.content_id))
             .collect();
 
-        let payload = BlockList { blocks }.to_xml().into();
-        let response = self
-            .put_request(path, payload)
-            .with_attributes(attributes)
-            .with_tags(tags)
-            .with_extensions(extensions)
-            .query(&[("comp", "blocklist")])
-            .idempotent(true)
-            .send()
-            .await?;
+        let payload: PutPayload = BlockList { blocks }.to_xml().into();
+        let response = loop {
+            let result = self
+                .put_request(path, payload.clone())
+                .with_attributes(attributes.clone())
+                .with_tags(tags.clone())
+                .with_extensions(extensions.clone())
+                .query(&[("comp", "blocklist")])
+                .idempotent(true)
+                .send()
+                .await;
+            match result {
+                Ok(response) => break response,
+                Err(error) if retry.should_retry(&error).await => continue,
+                Err(error) => return Err(error),
+            }
+        };
 
         Ok(
             get_put_result(response, VERSION_HEADER)

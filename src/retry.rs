@@ -105,7 +105,32 @@ pub trait RetryPolicy: Debug + Send + Sync + 'static {
 #[derive(Clone)]
 struct MultipartRetryPolicy(Arc<dyn RetryPolicy>);
 
+#[derive(Clone)]
+#[cfg(feature = "azure")]
+struct AzureCompletionRetryPolicy(Arc<dyn RetryPolicy>);
+
 impl PutMultipartOptions {
+    /// Retry Azure block-list completion after bounded SDK retries are exhausted.
+    ///
+    /// The original ordered block list, attributes, and tags are retained. The
+    /// request uses `Latest` blocks, so a lost completion response does not
+    /// require uploading the parts again. This policy runs inside the original
+    /// completion call; calling `MultipartUpload::complete` a second time is not
+    /// supported. Other backends ignore this option.
+    #[must_use]
+    #[cfg(feature = "azure")]
+    pub fn with_azure_completion_retry_policy(mut self, policy: Arc<dyn RetryPolicy>) -> Self {
+        self.extensions.insert(AzureCompletionRetryPolicy(policy));
+        self
+    }
+
+    #[cfg(feature = "azure")]
+    pub(crate) fn azure_completion_retry_policy(&self) -> Option<Arc<dyn RetryPolicy>> {
+        self.extensions
+            .get::<AzureCompletionRetryPolicy>()
+            .map(|policy| Arc::clone(&policy.0))
+    }
+
     /// Retry failed multipart part uploads according to `policy`
     ///
     /// The policy runs after the existing bounded request retries are
