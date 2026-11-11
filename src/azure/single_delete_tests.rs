@@ -47,7 +47,7 @@ impl HttpService for Transport {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let body = HttpResponseBody::new(request.into_body()).bytes().await?;
         assert!(body.is_empty());
-        let mut response = HttpResponse::new(HttpResponseBody::from(""));
+        let mut response = HttpResponse::new(HttpResponseBody::from(String::new()));
         *response.status_mut() = self.status.try_into().unwrap();
         Ok(response)
     }
