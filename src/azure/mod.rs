@@ -52,6 +52,9 @@ mod builder;
 mod client;
 mod credential;
 
+#[cfg(test)]
+mod single_delete_tests;
+
 /// [`CredentialProvider`] for [`MicrosoftAzure`]
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
 use crate::azure::client::AzureClient;

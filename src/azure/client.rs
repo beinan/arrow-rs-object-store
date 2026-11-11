@@ -98,6 +98,12 @@ pub(crate) enum Error {
         path: String,
     },
 
+    #[error("Error performing delete request {}: {}", path, source)]
+    DeleteRequest {
+        source: crate::client::retry::RetryError,
+        path: String,
+    },
+
     #[error("Error performing bulk delete request: {}", source)]
     BulkDeleteRequest {
         source: crate::client::retry::RetryError,
@@ -168,9 +174,9 @@ pub(crate) enum Error {
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::GetRequest { source, path } | Error::PutRequest { source, path } => {
-                source.error(STORE, path)
-            }
+            Error::GetRequest { source, path }
+            | Error::PutRequest { source, path }
+            | Error::DeleteRequest { source, path } => source.error(STORE, path),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -898,6 +904,12 @@ impl AzureClient {
             return Ok(Vec::new());
         }
 
+        // A singleton does not need the Blob Batch endpoint. In particular,
+        // ObjectStoreExt::delete feeds one path through delete_stream.
+        if let [path] = paths.as_slice() {
+            return Ok(vec![self.delete_request(path).await.map(|()| path.clone())]);
+        }
+
         let credential = self.get_credential().await?;
 
         // https://www.ietf.org/rfc/rfc2046
@@ -938,6 +950,24 @@ impl AzureClient {
         let results = parse_blob_batch_delete_body(batch_body, boundary, &paths).await?;
 
         Ok(results)
+    }
+
+    async fn delete_request(&self, path: &Path) -> Result<()> {
+        let credential = self.get_credential().await?;
+        let sensitive = self.config.is_sensitive(&credential);
+        self.client
+            .delete(self.config.path_url(path).as_str())
+            .header(CONTENT_LENGTH, HeaderValue::from(0))
+            .with_azure_authorization(self.crypto(), &credential, &self.config.account)?
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .send()
+            .await
+            .map_err(|source| Error::DeleteRequest {
+                source,
+                path: path.as_ref().into(),
+            })?;
+        Ok(())
     }
 
     /// Make an Azure copy request <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob>.
